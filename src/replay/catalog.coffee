@@ -1,4 +1,5 @@
 assert         = require("assert")
+debug          = require("./debug")
 mkdirp         = require('mkdirp')
 File           = require("fs")
 Path           = require("path")
@@ -61,8 +62,7 @@ class Catalog
     uid = +new Date + "" + Math.floor(Math.random() * 100000)
     tmpfile = "#{@getFixturesDir()}/node-replay.#{uid}"
     pathname = "#{@getFixturesDir()}/#{host.replace(":", "-")}"
-    logger = request.replay.logger
-    logger.log "Creating #{pathname}"
+    debug "Creating #{pathname}"
     mkdirp pathname, (error)->
       return callback error if error
       filename = "#{pathname}/#{uid}"
@@ -78,11 +78,11 @@ class Catalog
           writeHeaders file, body: jsStringEscape(body)
         file.write "\n"
         # Response part
-        file.write "#{response.status || 200} HTTP/#{response.version || "1.1"}\n"
+        file.write "HTTP/#{response.version || "1.1"} #{response.statusCode || 200} #{response.statusMessage}\n"
         writeHeaders file, response.headers
         file.write "\n"
         for part in response.body
-          file.write part
+          file.write(part[0], part[1])
         file.end ->
           File.rename tmpfile, filename, callback
       catch error
@@ -90,6 +90,7 @@ class Catalog
 
   _read: (filename)->
     request_headers = @settings.headers
+
     parse_request = (request)->
       assert request, "#{filename} missing request section"
       [method_and_path, header_lines...] = request.split(/\n/)
@@ -100,6 +101,7 @@ class Catalog
       else
         [method, path] = method_and_path.split(/\s/)
       assert method && (path || regexp), "#{filename}: first line must be <method> <path>"
+      assert /^[a-zA-Z]+$/.test(method), "#{filename}: method not valid"
       headers = parseHeaders(filename, header_lines, request_headers)
       body = headers["body"]
       delete headers["body"]
@@ -109,19 +111,44 @@ class Catalog
     parse_response = (response, body)->
       if response
         [status_line, header_lines...] = response.split(/\n/)
-        status = parseInt(status_line.split()[0], 10)
-        version = status_line.match(/\d.\d$/)
-        headers = parseHeaders(filename, header_lines)
-      return { status: status, version: version, headers: headers, body: body }
+        new_format = status_line.match(/HTTP\/(\d\.\d)\s+(\d{3})\s*(.*)/)
+        if new_format
+          version       = new_format[1]
+          statusCode    = parseInt(new_format[2], 10)
+          statusMessage = new_format[3].trim()
+        else
+          version       = '1.1'
+          statusCode    = parseInt(status_line, 10)
+        headers       = parseHeaders(filename, header_lines)
+        rawHeaders    = header_lines.reduce((raw, header)->
+          [name, value] = header.split(/:\s+/)
+          raw.push(name)
+          raw.push(value)
+          return raw
+        , [])
+      return {
+        statusCode:     statusCode
+        statusMessage:  statusMessage
+        version:        version
+        headers:        headers
+        rawHeaders:     rawHeaders
+        body:           body
+        trailers:       {}
+        rawTrailers:    []
+      }
 
-    [request, response, body] = readAndInitialParseFile(filename)
+    [request, response, part] = readAndInitialParseFile(filename)
+    body = [[part, undefined]]
     return { request: parse_request(request), response: parse_response(response, body) }
+
 
 readAndInitialParseFile = (filename)->
   buffer = File.readFileSync(filename)
   parts = buffer.toString('utf8').split('\n\n')
   if parts.length > 2
-    body = buffer.slice(parts[0].length + parts[1].length + 4)
+    parts0 = new Buffer(parts[0], 'utf8')
+    parts1 = new Buffer(parts[1], 'utf8')
+    body = buffer.slice(parts0.length + parts1.length + 4)
   return [parts[0], parts[1], body || '']
 
 # Parse headers from header_lines.  Optional argument `only` is an array of

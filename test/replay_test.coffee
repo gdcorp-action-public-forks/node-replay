@@ -1,8 +1,9 @@
-{  setup, HTTP_PORT, HTTPS_PORT, INACTIVE_PORT } = require("./helpers")
+{  setup, HTTP_PORT, HTTPS_PORT, INACTIVE_PORT, CORRUPT_PORT } = require("./helpers")
 assert  = require("assert")
 File    = require("fs")
 HTTP    = require("http")
 HTTPS   = require("https")
+Async   = require("async")
 Request = require("request")
 Replay  = require("../src/replay")
 
@@ -15,7 +16,7 @@ describe "Replay", ->
   describe "matching URL", ->
     before ->
       Replay.mode = "replay"
-      
+
     describe "listeners", ->
       before (done)->
         HTTP.get("http://example.com:#{INACTIVE_PORT}/weather?c=94606", (@response)=>
@@ -35,7 +36,10 @@ describe "Replay", ->
     describe "callback", ->
       before (done)->
         HTTP.get(hostname: "example.com", port: INACTIVE_PORT, path: "/weather?c=94606", (@response)=>
-          done()
+          @body = ""
+          @response.on "data", (chunk)=>
+            @body += chunk
+          @response.on "end", done
         ).on("error", done)
 
       it "should return HTTP version", ->
@@ -47,6 +51,27 @@ describe "Replay", ->
       it "should return response trailers", ->
         assert.deepEqual @response.trailers, { }
 
+  describe "matching on query strings", ->
+    before (done)->
+      HTTP.get(hostname: "example.com", port: INACTIVE_PORT, path: "/query?param=1", (@response1)=>
+        @body1 = ""
+        @response1.on "data", (chunk)=>
+          @body1 += chunk
+        @response1.on "end", done
+      ).on("error", done)
+
+    before (done)->
+      HTTP.get(hostname: "example.com", port: INACTIVE_PORT, path: "/query?param=2", (@response2)=>
+        @body2 = ""
+        @response2.on "data", (chunk)=>
+          @body2 += chunk
+        @response2.on "end", done
+      ).on("error", done)
+
+    it "should select the correct fixture", ->
+      # HTTP body contains tailing line feeds, use trim to get rid of them
+      assert.equal @body1.trim(), '1'
+      assert.equal @body2.trim(), '2'
 
   describe "matching an https url", ->
     before ->
@@ -61,7 +86,6 @@ describe "Replay", ->
     it "should return status code", ->
       assert.equal @response.statusCode, 200
 
-
   describe "matching a regexp", ->
     before ->
       Replay.mode = "replay"
@@ -75,7 +99,7 @@ describe "Replay", ->
       ).on("error", done)
 
     it "should match the right fixture", ->
-      assert.equal @body, "regexp"
+      assert.equal @body.trim(), "regexp"
 
 
   describe "matching a regexp url with flags", ->
@@ -91,7 +115,7 @@ describe "Replay", ->
       ).on("error", done)
 
     it "should match a fixture", ->
-      assert.equal @body, "Aregexp2"
+      assert.equal @body.trim(), "Aregexp2"
 
   describe "matching when changing fixtures dir", ->
     before ->
@@ -128,13 +152,51 @@ describe "Replay", ->
     after ->
       Replay.fixtures = "#{__dirname}/fixtures"
 
+  describe "recording query parameters", ->
+    before setup
+
+    before ->
+      Replay.mode = "record"
+      Replay.reset "127.0.0.1"
+      @fixturesDir = "#{__dirname}/fixtures/127.0.0.1-#{HTTP_PORT}"
+
+    after ->
+      for file in File.readdirSync(@fixturesDir)
+        File.unlinkSync("#{@fixturesDir}/#{file}")
+      File.rmdirSync @fixturesDir
+
+    it "should create a fixture per unique URL path", (done) ->
+      requests = [
+        {name: 'Lorem', extra: 'Ipsum'}
+        {name: 'Dolor', extra: 'Sit'}
+      ].map (query) -> (callback) ->
+        Request({
+          method: 'get', url: "http://127.0.0.1:#{HTTP_PORT}/query", qs: query, json: true
+        }, (error, response, body) ->
+          if error
+            callback(error)
+            return
+          try
+            assert.deepEqual body, query
+          catch error
+            return callback(error)
+          callback null, query
+        )
+
+      Async.series requests, (err, results) ->
+        return done(err) if err?
+        # fixtures should be written now
+        Replay.mode = "replay"
+        Async.series requests, (err, results) ->
+          done(err)
+
   describe "recording multiple of the same header", ->
 
     before setup
 
     before ->
       Replay.mode = "record"
-      Replay.allow "127.0.0.1"
+      Replay.reset "127.0.0.1"
       @fixturesDir = "#{__dirname}/fixtures/127.0.0.1-#{HTTP_PORT}"
 
     before (done)->
@@ -162,10 +224,9 @@ describe "Replay", ->
         assert.equal @headers["set-cookie"][1], "c2=v2; Path=/"
 
     after ->
-      Replay.localhost "127.0.0.1"
       for file in File.readdirSync(@fixturesDir)
         File.unlinkSync("#{@fixturesDir}/#{file}")
-      File.rmdir(@fixturesDir)
+      File.rmdirSync(@fixturesDir)
 
 
   describe "recording POST data", ->
@@ -173,7 +234,7 @@ describe "Replay", ->
 
     before ->
       Replay.mode = "record"
-      Replay.allow "127.0.0.1"
+      Replay.reset "127.0.0.1"
       @fixturesDir = "#{__dirname}/fixtures/127.0.0.1-#{HTTP_PORT}"
 
     before (done)->
@@ -192,7 +253,6 @@ describe "Replay", ->
       assert has_data
 
     after ->
-      Replay.localhost "127.0.0.1"
       for file in File.readdirSync(@fixturesDir)
         File.unlinkSync("#{@fixturesDir}/#{file}")
       File.rmdir(@fixturesDir)
@@ -203,7 +263,7 @@ describe "Replay", ->
 
     before ->
       Replay.mode = "record"
-      Replay.allow "127.0.0.1"
+      Replay.reset "127.0.0.1"
       @fixturesDir = "#{__dirname}/fixtures/127.0.0.1-#{HTTP_PORT}"
 
     before (done)->
@@ -219,7 +279,6 @@ describe "Replay", ->
       assert fixture.split("\n")[1] == "body: line1\\nline2\\nline3"
 
     after ->
-      Replay.localhost "127.0.0.1"
       for file in File.readdirSync(@fixturesDir)
         File.unlinkSync("#{@fixturesDir}/#{file}")
       File.rmdir(@fixturesDir)
@@ -233,7 +292,7 @@ describe "Replay", ->
       before (done)->
         request = HTTP.request(hostname: "example.com", port: INACTIVE_PORT, path: "/post-body", method: "post")
         request.on "response", (@response)=>
-          response.on "end", done
+          @response.on "end", done
         request.on("error", done)
         request.write("request body")
         request.end()
@@ -250,7 +309,7 @@ describe "Replay", ->
       before (done)->
         request = HTTP.request(hostname: "example.com", port: INACTIVE_PORT, path: "/post-body-multi", method: "post")
         request.on "response", (@response)=>
-          response.on "end", done
+          @response.on "end", done
         request.on("error", done)
         request.write """line1
         line2
@@ -267,7 +326,7 @@ describe "Replay", ->
 
     before ->
       Replay.mode = "record"
-      Replay.allow "127.0.0.1"
+      Replay.reset "127.0.0.1"
       # Drop the /accept/ header
       Replay.headers = Replay.headers.filter((header)-> !header.test('accept'))
       @fixturesDir = "#{__dirname}/fixtures/127.0.0.1-#{HTTP_PORT}"
@@ -283,7 +342,6 @@ describe "Replay", ->
       assert !/accept/.test fixture
 
     after ->
-      Replay.localhost "127.0.0.1"
       for file in File.readdirSync(@fixturesDir)
         File.unlinkSync("#{@fixturesDir}/#{file}")
       File.rmdir(@fixturesDir)
@@ -385,6 +443,19 @@ describe "Replay", ->
         assert @error instanceof Error
 
 
+  describe "corrupt replay file", ->
+    before ->
+      Replay.mode = "default"
+
+    before (done)->
+      HTTP.get(hostname: "example.com", port: CORRUPT_PORT, path: "/minimal", done)
+        .on "error", (@error)=>
+          done()
+
+    it "should callback with error", ->
+      assert @error instanceof Error
+      assert.equal @error.code, "CORRUPT FIXTURE"
+
   describe "minimal response", ->
     before ->
       Replay.mode = "replay"
@@ -393,11 +464,11 @@ describe "Replay", ->
       before (done)->
         request = HTTP.get(hostname: "example.com", port: INACTIVE_PORT, path: "/minimal")
         request.on "response", (@response)=>
-          @response.body = null
+          @response.body = ""
           @response.on "data", (chunk)=>
-            # This will fail, no response.body
-            @response.body += chunk
-          @response.on "end", done
+            @response.body = @reponse.body + chunk
+          @response.on("end", done)
+          @response.on("error", done)
         request.on "error", done
 
       it "should return HTTP version", ->
@@ -409,5 +480,4 @@ describe "Replay", ->
       it "should return no response trailers", ->
         assert.deepEqual @response.trailers, { }
       it "should return no response body", ->
-        assert !@response.body
-
+        assert @response.body == ""

@@ -18,6 +18,7 @@ Async       = require("async")
 HTTP_PORT     = 3004
 HTTPS_PORT    = 3443
 INACTIVE_PORT = 3002
+CORRUPT_PORT  = 3555
 SSL =
   key:  File.readFileSync("#{__dirname}/ssl/privatekey.pem")
   cert: File.readFileSync("#{__dirname}/ssl/certificate.pem")
@@ -31,33 +32,41 @@ Replay.silent = true
 
 # Redirect HTTP requests to pass-through domain
 original_lookup = DNS.lookup
-DNS.lookup = (domain, callback)->
+DNS.lookup = (domain, options, callback)->
   if domain == "pass-through"
+    if typeof(options) == "function"
+      callback = options
     callback null, "127.0.0.1", 4
   else
-    original_lookup domain, callback
+    original_lookup(domain, options, callback)
 
 
 # Serve pages from localhost.
 server = express()
-server.use(bodyParser())
+server.use(bodyParser.urlencoded(extended: false))
 # Success page.
 server.get "/", (req, res)->
   res.send "Success!"
 # Not found
 server.get "/404", (req, res)->
-  res.send 404, "Not found"
+  res.status(404).send("Not found")
 # Internal error
 server.get "/500", (req, res)->
-  res.send 500, "Boom!"
+  res.status(500).send("Boom!")
+# Query string
+server.get "/query", (req, res)->
+  res.send { name: req.query.name, extra: req.query.extra }
 # Multiple set-cookie headers
 server.get "/set-cookie", (req, res)->
   res.cookie "c1", "v1"
   res.cookie "c2", "v2"
-  res.send 200
+  res.sendStatus 200
 # POST data
 server.post "/post-data", (req, res)->
-  res.send 200
+  res.sendStatus 200
+# Echo POST body
+server.post "/post-echo", (req, res)->
+  res.send(req.body)
 
 
 # Setup environment for running tests.
@@ -83,3 +92,4 @@ module.exports =
   HTTP_PORT:      HTTP_PORT
   HTTPS_PORT:     HTTPS_PORT
   INACTIVE_PORT:  INACTIVE_PORT
+  CORRUPT_PORT:   CORRUPT_PORT

@@ -3,6 +3,7 @@
 
 Catalog           = require("./catalog")
 Chain             = require("./chain")
+debug             = require("./debug")
 { EventEmitter }  = require("events")
 logger            = require("./logger")
 passThrough       = require("./pass_through")
@@ -30,15 +31,10 @@ MATCH_HEADERS = [/^accept/, /^authorization/, /^body/, /^content-type/, /^host/,
 #             you'll want to prepend them.  The `use` method will prepend a
 #             proxy to the chain.
 #
-# debug     - Set this to true to dump more information to the console, or run
-#             with DEBUG=replay
-#
 # headers   - Only these headers are matched when recording/replaying.  A list
 #             of regular expressions.
 #
 # fixtures  - Main directory for replay fixtures.
-#
-# logger    - Logger to use (defaults to console)
 #
 # mode      - The mode we're running in, one of:
 #   bloody  - Allow outbound HTTP requests, don't replay anything.  Use this to
@@ -51,34 +47,24 @@ MATCH_HEADERS = [/^accept/, /^authorization/, /^body/, /^content-type/, /^host/,
 #             e.g. when adding tests or making code changes.
 #   replay  - Do not allow outbound HTTP requests, replay captured responses.
 #             This is the default mode and the one most useful for running tests
-#
-# silent    - If true do not emit errors to logger
 class Replay extends EventEmitter
   constructor: (mode)->
     unless ~MODES.indexOf(mode)
       throw new Error("Unsupported mode '#{mode}', must be one of #{MODES.join(", ")}.")
-    @chain = new Chain()
-    @debug = /\b(all|replay)\b/.test(process.env.DEBUG)
-    @logger =
-      log:    (message)=>
-        if @debug
-          console.log message
-      error:  (message)=>
-        if @debug || !@silent
-          console.error message
-    @mode = mode
-    # localhost servers. pass requests directly to host, and route to 127.0.0.1.
-    @_localhosts = { localhost: true, '127.0.0.1': true }
-    # allowed servers. allow network access to any servers listed here.
-    @_allowed = { }
-    # ignored servers. do not contact or record.
-    @_ignored = { }
+    @chain  = new Chain()
+    @mode   = mode
+    # Localhost servers: pass request to localhost
+    @_localhosts = { "localhost": true, '127.0.0.1': true }
+    # Pass through requests to these servers
+    @_passThrough = { }
+    # Dropp connections to these servers
+    @_dropped = { }
     @catalog = new Catalog(this)
     @headers = MATCH_HEADERS
 
     # Automatically emit connection errors and such, also prevent process from failing.
     @on "error", (error, url)=>
-      @logger.error "Replay: #{error.message || error}"
+      debug("Replay: #{error.message || error}")
 
 
   # Addes a proxy to the beginning of the processing chain, so it executes ahead of any existing proxy.
@@ -88,42 +74,51 @@ class Replay extends EventEmitter
   use: (proxy)->
     @chain.prepend(proxy)
 
-  # Allow network access to this host.
+  # Alias allow to passThrough for backward compatibility
   allow: (hosts...)->
+    @passThrough(hosts...)
+
+  # Pass through all requests to these hosts
+  passThrough: (hosts...)->
+    @reset(hosts...)
     for host in hosts
-      @_allowed[host] = true
-      delete @_ignored[host]
-      delete @_localhosts[host]
+      @_passThrough[host] = true
 
-  # True if this host is allowed network access.
-  isAllowed: (host)->
-    return !!@_allowed[host]
+  # True to pass through requests to this host
+  isPassThrough: (host)->
+    domain = host.replace(/^[^.]+/, '*')
+    return !!(@_passThrough[host] || @_passThrough[domain] || @_passThrough["*.#{host}"])
 
-  # Ignore network access to this host.
-  ignore: (hosts...)->
+  # Do not allow network access to these hosts (drop connection)
+  drop: (hosts...)->
+    @reset(hosts...)
     for host in hosts
-      @_ignored[host] = true
-      delete @_allowed[host]
-      delete @_localhosts[host]
+      @_dropped[host] = true
 
-  # True if this host is on the ignored list.
-  isIgnored: (host)->
-    return !!@_ignored[host]
+  # True if this host is on the dropped list
+  isDropped: (host)->
+    domain = host.replace(/^[^.]+/, '*')
+    return !!(@_dropped[host] || @_dropped[domain] || @_dropped['*.#{host}'])
 
-  # Treats this host as localhost: requests are routed directory to 127.0.0.1, no replay.  Useful when you want to send
-  # requests to the test server using its production host name.
-  #
-  # Example
-  #     replay.localhost "www.example.com"
+  # Treats this host as localhost: requests are routed directly to 127.0.0.1, no
+  # replay.  Useful when you want to send requests to the test server using its
+  # production host name.
   localhost: (hosts...)->
+    @reset(hosts...)
     for host in hosts
       @_localhosts[host] = true
-      delete @_allowed[host]
-      delete @_ignored[host]
 
   # True if this host should be treated as localhost.
   isLocalhost: (host)->
-    return !!@_localhosts[host]
+    domain = host.replace(/^[^.]+/, '*')
+    return !!(@_localhosts[host] || @_localhosts[domain] || @_localhosts["*.#{host}"])
+
+  # Use this when you want to exclude host from dropped/pass-through/localhost
+  reset: (hosts...)->
+    for host in hosts
+      delete @_localhosts[host]
+      delete @_passThrough[host]
+      delete @_dropped[host]
 
   @prototype.__defineGetter__ "fixtures", ->
     @catalog.getFixturesDir()
@@ -142,8 +137,8 @@ replay = new Replay(process.env.REPLAY || "replay")
 # - Replay recorded responses
 # - Pass through requests in bloody and cheat modes
 passWhenBloodyOrCheat = (request)->
-  return replay.isAllowed(request.url.hostname) ||
-         (replay.mode == "cheat" && !replay.isIgnored(request.url.hostname))
+  return replay.isPassThrough(request.url.hostname) ||
+         (replay.mode == "cheat" && !replay.isDropped(request.url.hostname))
 passToLocalhost = (request)->
   return replay.isLocalhost(request.url.hostname) ||
          replay.mode == "bloody"

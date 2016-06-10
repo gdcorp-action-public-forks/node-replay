@@ -35,39 +35,34 @@ class Matcher
       @hostname = url.hostname
       @port     = url.port
       @path     = url.path
-      @query    = url.query
-    
+
     @method   = (request.method && request.method.toUpperCase()) || "GET"
     @headers  = {}
     if request.headers
       for name, value of request.headers
         @headers[name.toLowerCase()] = value
     @body = request.body
-    
+
     # Create a normalized response object that we return.
     @response =
-      version:  response.version || "1.1"
-      status:   response.status && parseInt(response.status, 10) || 200
-      headers:  {}
-      body:     []
-      trailers: {}
+      version:        response.version || "1.1"
+      statusCode:     response.statusCode && parseInt(response.statusCode, 10) || 200
+      statusMessage:  response.statusMessage || ""
+      headers:        {}
+      body:           response.body.slice(0)
+      trailers:       {}
     # Copy over header to response, downcase header names.
     if response.headers
       headers = @response.headers
       for name, value of response.headers
         headers[name.toLowerCase()] = value
-    # Copy over body (string) or multiple body parts (strings or content/encoding pairs)
-    if Array.isArray(response.body)
-      @response.body = response.body.slice(0)
-    else if response.body
-      @response.body = [response.body]
     # Copy over trailers to response, downcase trailers names.
     if response.trailers
       trailers = @response.trailers
       for name, value of response.trailers
         trailers[name.toLowerCase()] = value
 
-  # Quick and effective matching. 
+  # Quick and effective matching.
   match: (request)->
     { url, method, headers, body } = request
     return false if @hostname && @hostname != url.hostname
@@ -76,10 +71,10 @@ class Matcher
     else
       return false if @port && @port != url.port
       return false if @path && @path != url.path
-      return false if @query && @query != url.query
     return false unless @method == method
     for name, value of @headers
-      return false if value != headers[name]
+      if value != headers[name]
+        return false
     if body
       data = ""
       for chunks in body
@@ -109,7 +104,7 @@ class Matcher
           body:     mapping.request.body
       else
         request =
-          url:      URL.resolve("http://#{host}/", mapping.request.url)
+          url:      URL.resolve("http://#{host}", mapping.request.url)
           method:   mapping.request.method
           headers:  mapping.request.headers
           body:     mapping.request.body

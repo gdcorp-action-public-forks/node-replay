@@ -1,54 +1,56 @@
 HTTP = require("http")
-HTTPS = require("https")
 
 
-# Capture original HTTP request. PassThrough proxy uses that.
-httpRequest  = HTTP.request
-httpsRequest = HTTPS.request
+ClientRequest = HTTP.ClientRequest
 
-passThrough = (allow)->
+passThrough = (passThrough)->
   if arguments.length == 0
-    allow = -> true
-  else if typeof allow == "string"
-    [hostname, allow] = [allow, (request)-> request.hostname == hostname]
-  else unless typeof allow == "function"
-    [boolean, allow] = [allow, (request)-> !!boolean]
+    passThrough = -> true
+  else if typeof passThrough == "string"
+    [hostname, passThrough] = [passThrough, (request)-> request.hostname == hostname]
+  else unless typeof passThrough == "function"
+    [boolean, passThrough] = [passThrough, (request)-> !!boolean]
 
   return (request, callback)->
-    if allow(request)
+    if passThrough(request)
       options =
-        cert:               request.cert
-        headers:            request.headers
-        hostname:           request.url.hostname
-        key:                request.key
-        method:             request.method
-        path:               request.path
-        port:               request.url.port
         protocol:           request.url.protocol
-        rejectUnauthorized: request.rejectUnauthorized
+        hostname:           request.url.hostname
+        port:               request.url.port
+        path:               request.url.path
+        method:             request.method
+        headers:            request.headers
+        agent:              request.agent
+        auth:               request.auth
+        key:                request.key
+        cert:               request.cert
         secureOptions:      request.secureOptions
         secureProtocol:     request.secureProtocol
+        rejectUnauthorized: request.rejectUnauthorized
 
-      if request.url.protocol == "https:"
-        http = httpsRequest(options)
-      else
-        http = httpRequest(options)
+      http = new ClientRequest(options)
+      if (request.trailers)
+        http.addTrailers(request.trailers)
       http.on "error", (error)->
         callback error
       http.on "response", (response)->
         captured =
-          version: response.httpVersion
-          status:  response.statusCode
-          headers: response.headers
+          version:        response.httpVersion
+          statusCode:     response.statusCode
+          statusMessage:  response.statusMessage
+          headers:        response.headers
+          rawHeaders:     response.rawHeaders
           body:    []
-        response.on "data", (chunk)->
-          captured.body.push chunk
+        response.on "data", (chunk, encoding)->
+          captured.body.push([chunk, encoding])
         response.on "end", ->
-          captured.trailers = response.trailers
+          captured.trailers     = response.trailers
+          captured.rawTrailers  = response.rawTrailers
           callback null, captured
+
       if request.body
         for part in request.body
-          http.write part[0], part[1]
+          http.write(part[0], part[1])
       http.end()
     else
       callback null

@@ -1,3 +1,65 @@
+# Version 2.0.6 2015-04-30
+
+FIXED pass through when sending request bodies
+
+
+# Version 2.0.5 2015-04-28
+
+FIXED SSL requests when not providing an explicit `protocol` option.
+
+
+# Version 2.0.4 2015-03-10
+
+FIXED problem with https support on 0.10
+
+
+# Version 2.0.3 2015-03-10
+
+ADDED Supports streaming API v2 (0.12/iojs)
+
+ADDED Supports new additions to HTTP API (0.12/iojs)
+
+CHANGED Replay.allow is now Replay.passThrough, a better name since the behavior
+is to pass through requests directly to the target server.
+
+CHANGED Replay.ignore is now Replay.drop, a better name since the behavior is to
+drop the connection (you'll get ECONNREFUSED).
+
+CHANGED New way for writing HTTP response line:
+
+  HTTP/1.1 200 OK
+  HTTP/1.1 404 Not Found
+
+CHANGED To enable debugging, run with environment variable DEBUG=replay
+
+FIXED HTTPS requests looping forvever
+
+
+## Version 1.12.0 2014-12-04
+
+ADDED you can now allow, ignore and localhost multiple domains
+
+```
+Replay.localhos('*.example.com');
+```
+
+
+## Version 1.11.0 2014-11-10
+
+ADDED now saving query string as part of request URL
+
+FIXED when ignoring request, throw ECONNREFUSED error
+
+FIXED handle case where header value is zero (number)
+
+
+## Version 1.10.3 2014-04-19
+
+ADDED 127.0.0.1 to default localhost addresses (Rajit Singh)
+
+FIXED double callback issue on catalog save (Itay Adler)
+
+
 ## Version 1.10.2 2014-04-19
 
 FIXED bug with header stringifying (for realz now)
