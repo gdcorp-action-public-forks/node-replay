@@ -33,6 +33,8 @@ URL               = require("url")
 
 # HTTP client request that captures the request and sends it down the processing chain.
 class ProxyRequest extends HTTP.ClientRequest
+  ProxyRequest::_readableState = {}
+
   constructor: (options = {}, @proxy)->
     HTTP.IncomingMessage.call(this)
     @method       = (options.method || "GET").toUpperCase()
